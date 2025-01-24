@@ -3,7 +3,7 @@
 
 # limpeza-no-youtube
 
-  <img src="https://pbs.twimg.com/media/GCPB4fOXQAAhbJq.png" alt="Thumb" width="230"/>
+  <img src="https://pbs.twimg.com/media/GCPB4fOXQAAhbJq.png" alt="Thumb" width="280"/>
 
 👇
 
