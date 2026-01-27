@@ -1,145 +1,171 @@
-(function (window) {
-    'use strict';
+const ENABLED = true;
+const MIN_DURATION_MS = 1000 * 60 * 1.5; 
+const CHECK_FOR_CONFIRM_INTERVAL = 2800;
+let CYCLE_INTERVAL = 3200;
+const LONG_WAIT_CYCLE_ORIGINAL_INTERVAL = 15000;
+let veryLongDuration = MIN_DURATION_MS * 10;
+let wantCycling = true;
+let longWait = LONG_WAIT_CYCLE_ORIGINAL_INTERVAL;
+let alreadyRemoved = [];
 
-    class YoutubeCleanerEngine {
-        constructor() {
-            this.config = {
-                minDurationSec: 65, 
-                scanInterval: 2000,
-                actionDelay: 500,  
-                maxRetries: 3,    
-                debug: true      
-            };
+const disallowedChannels = [
+  "Flow Podcast",
+  "Cortes do Flow",
+  "Flow Fora de Contexto",
+  "Podpah",
+  "Cortes do Podpah",
+  "Inteligência Ltda.",
+  "Cortes Inteligentes",
+  "Inteligência Ltda",
+  "Cortes do Inteligência [OFICIAL]",
+  "Canal Caixa Preta",
+  "Mário Garcês",
+  "Duda Garbi",
+  "Cortes do Inteligência [OFICIAL]",
+  "Bento Ribeiro | Chapado Crítico",
+  "Cortes do Caixa Preta [OFICIAL]",
+  "Canal do Barreto!",
+  "O Melhor do Pretinho",
+  "Bastidores do Pretinho",
+  "Alcemar da Mascada",
+  "CalangoLive",
+  "Venus Podcast",
+  "Cortes do Venus",
+  "Ticaracaticast",
+  // kkkkkkkkkkkkkkkkkkkkk que nome é esse 
+  "Cortes do Ticaracaticast",
+  "Planeta Podcast",
+  "Cortes do Planeta Podcast",
+  "Léo Lins Podcast",
+  "Cortes do Léo Lins",
+  "Groselha Talk",
+  "Cortes do Groselha Talk",
+  "Primocast",
+  "Cortes do Primocast",
+  "Podcast do Rafinha Bastos",
+  "Rafi Bastos",
+  "Cortes - Mais que 8 Minutos [OFICIAL]",
+  "Talk Flow",
+  "Podcast Três Irmãos",
+  "Cortes dos Três Irmãos",
+  "Não Ouvo",
+  "Cortes do Não Ouvo",
+  "Cortes do Empreendacast",
+  "Nerdcast",
+  "Cortes do Nerdcast",
+  "Prosa Guiada",
+  "Cortes da Prosa Guiada",
+  "PodDelas",
+  "Cortes do PodDelas",
+  "Galãs Feios Podcast",
+  "Cortes dos Galãs Feios"
+];
 
-            this.selectors = {
-                item: 'ytd-grid-video-renderer, ytd-rich-item-renderer, ytd-video-renderer, ytd-playlist-video-renderer, div[role="listitem"]',
-                title: '#video-title, #video-title-link',
-                duration: 'ytd-thumbnail-overlay-time-status-renderer, span.ytd-thumbnail-overlay-time-status-renderer',
-                channel: '#channel-name, .ytd-channel-name, #text-container, a.yt-simple-endpoint.style-scope.yt-formatted-string',
-                menuButton: 'button.dropdown-trigger, button[aria-label="Action menu"], button.ytd-menu-renderer',
-                removeButton: 'ytd-menu-service-item-renderer, paper-item, yt-formatted-string'
-            };
+const log = (...args) => {
+  args[0] = `[auto-delete] ${args[0]}`;
+  console.log(...args);
+};
 
-            this.isRunning = false;
-            this.stats = { removed: 0, scanned: 0, errors: 0 };
-            this.disallowedChannels = new Set([
-                "Cortes do Flow", "Podpah", "Cortes do Podpah", "Inteligência Ltda.", 
-                "Cortes Inteligentes", "Venus Podcast", "Cortes do Venus"
-            ]);
-        }
+const durationString = (vidElement) => {
+  const elt = vidElement.querySelector('[aria-label="Video duration"]');
+  return elt ? elt.textContent.trim() : null;
+};
 
-        init() {
-            if (this.isRunning) return;
-            this.isRunning = true;
-            this.log('🚀 Youtube Cleaner Iniciado', 'color: #00ff00; font-weight: bold;');
-            this.loop();
-        }
+const duration = (vidElement) => {
+  const dString = durationString(vidElement);
+  if (!dString) return veryLongDuration;
+  if (dString.split(':').length > 2) return veryLongDuration;
+  const [mins, secs] = dString.split(':').map(str => parseInt(str, 10));
+  return mins * 60 * 1000 + secs * 1000;
+};
 
-        loop() {
-            if (!this.isRunning) return;
-            try {
-                this.scanAndProcess();
-            } catch (e) {
-                console.error(e);
-            }
-            setTimeout(() => requestAnimationFrame(() => this.loop()), this.config.scanInterval);
-        }
+const getIdentifiers = (videoElement) =>
+  [...videoElement.getElementsByTagName('a')].map(anchor => anchor.textContent.trim());
 
-        scanAndProcess() {
-            const items = document.querySelectorAll(this.selectors.item);
-            items.forEach(item => {
-                if (item.dataset.ycProcessed) return;
-                const data = this.extractData(item);
-                if (!data.title) return;
+const vidUniquifier = (videoName, channelName) => `${videoName}|${channelName}`;
 
-                let shouldRemove = false;
-                let reason = '';
+const isPreviouslyRemoved = (videoElement) => {
+  const [videoName, channelName] = getIdentifiers(videoElement);
+  return alreadyRemoved.includes(vidUniquifier(videoName, channelName));
+};
 
-                if (data.durationMs > 0 && data.durationMs < (this.config.minDurationSec * 1000)) {
-                    shouldRemove = true;
-                    reason = `Short detectado (${data.durationStr})`;
-                } else if (this.isShortsMetadata(item)) {
-                    shouldRemove = true;
-                    reason = 'Short detectado (Metadata)';
-                } else if (this.disallowedChannels.has(data.channel)) {
-                    shouldRemove = true;
-                    reason = `Canal Bloqueado: ${data.channel}`;
-                }
+const isShort = (videoElement) => {
+  try {
+    return duration(videoElement) < MIN_DURATION_MS;
+  } catch (e) {
+    log(`Algum erro aqui:  ${e}`);
+    return false;
+  }
+};
 
-                if (shouldRemove) {
-                    this.removeItem(item, data, reason);
-                } else {
-                    item.dataset.ycProcessed = "true";
-                }
-            });
-        }
+const isFromDisallowedChannel = (videoElement) => {
+  const [videoName, channelName] = getIdentifiers(videoElement);
+  // log(`🤔: ${channelName} - ${videoName}`);
+  return disallowedChannels.includes(channelName);
+};
 
-        extractData(item) {
-            const titleEl = item.querySelector(this.selectors.title);
-            const durationEl = item.querySelector(this.selectors.duration);
-            const channelEl = item.querySelector(this.selectors.channel);
-            const durationStr = durationEl ? durationEl.textContent.trim() : '';
-            return {
-                title: titleEl ? titleEl.textContent.trim() : '',
-                durationStr: durationStr,
-                durationMs: this.parseDuration(durationStr),
-                channel: channelEl ? channelEl.textContent.trim() : ''
-            };
-        }
-
-        parseDuration(str) {
-            if (!str) return 0;
-            const parts = str.replace(/\s/g, '').split(':').map(p => parseInt(p, 10));
-            let seconds = 0;
-            if (parts.length === 3) seconds = (parts[0] * 3600) + (parts[1] * 60) + parts[2];
-            else if (parts.length === 2) seconds = (parts[0] * 60) + parts[1];
-            else if (parts.length === 1) seconds = parts[0];
-            return seconds * 1000;
-        }
-
-        isShortsMetadata(item) {
-            return !!item.querySelector('a[href*="/shorts/"]') || !!item.querySelector('[overlay-style="SHORTS"]');
-        }
-
-        async removeItem(item, data, reason) {
-            item.dataset.ycProcessed = "true";
-            this.stats.removed++;
-            this.log(`[REMOVIDO] ${data.title} | ${reason}`, 'color: red; font-weight: bold;');
-            try {
-                const deleteBtn = item.querySelector('button[aria-label^="Remove"], button[aria-label^="Delete"]');
-                if (deleteBtn) {
-                    deleteBtn.click();
-                    return;
-                }
-                const menuBtn = item.querySelector(this.selectors.menuButton);
-                if (menuBtn) {
-                    menuBtn.click();
-                    await new Promise(r => setTimeout(r, 300));
-                    const menuItems = document.querySelectorAll('ytd-menu-service-item-renderer');
-                    for (const menuItem of menuItems) {
-                        const text = menuItem.textContent.toLowerCase();
-                        if (text.includes('remover') || text.includes('remove') || text.includes('excluir')) {
-                            menuItem.click();
-                            return;
-                        }
-                    }
-                }
-                item.style.display = 'none';
-            } catch (e) {
-                item.style.display = 'none';
-            }
-        }
-
-        log(msg, style) {
-            if (this.config.debug) console.log(`%c[YoutubeCleaner] ${msg}`, style);
-        }
-
-        stop() { this.isRunning = false; }
-        start() { if (!this.isRunning) this.init(); }
-        status() { console.table(this.stats); }
-        addChannel(name) { this.disallowedChannels.add(name); }
+class ItemGetter {
+  previousCount = 0;
+  
+  next(ignorePrevious) {
+    const items = [...document.querySelectorAll('div[role="listitem"]')];
+    if (!ignorePrevious && items.length === this.previousCount) {
+      log(`SE MEXE YOUTUBE.`);
+      return null;
     }
+    this.previousCount = items.length;
+    return items.find(v => 
+      (isShort(v) || isFromDisallowedChannel(v)) && !isPreviouslyRemoved(v)
+    );
+  }
+}
 
-    window.YoutubeCleaner = new YoutubeCleanerEngine();
-    window.YoutubeCleaner.init();
-})(window);
+const itemGetter = new ItemGetter();
+
+function deleteOne(ignorePrevious) {
+  const nextItem = itemGetter.next(ignorePrevious);
+  if (nextItem) {
+    try {
+      const [videoName, channelName] = getIdentifiers(nextItem);
+      const dString = durationString(nextItem) || "-no duration-";
+      log(`Apagando-> ${videoName} : ${channelName} (${dString})...`);
+      if (ENABLED) {
+        const deleteButton = nextItem.getElementsByTagName('button')[0];
+        deleteButton.click();
+        alreadyRemoved.push(vidUniquifier(videoName, channelName));
+      } else {
+        log(`Delete action skipped. ENABLED is false.`);
+      }
+    } catch (e) {
+      log(`Algum erro aqui: ${e}`);
+    }
+    
+    if (wantCycling) {
+      setTimeout(() => {
+        const confirmationMenu = nextItem.querySelector('[aria-label="Activity options menu"]');
+        if (confirmationMenu) {
+          const confirmDeleteButton = confirmationMenu.querySelector('[aria-label="Delete activity item"]');
+          if (confirmDeleteButton) confirmDeleteButton.click();
+          setTimeout(deleteOne, CYCLE_INTERVAL);
+        } else {
+          setTimeout(deleteOne, CYCLE_INTERVAL - CHECK_FOR_CONFIRM_INTERVAL);
+        }
+      }, CHECK_FOR_CONFIRM_INTERVAL);
+    }
+    longWait = LONG_WAIT_CYCLE_ORIGINAL_INTERVAL;
+  } else {
+    log(`Ainda tá funcionando!! Está em um intervalo pra não bugar tudo.`);
+    setTimeout(() => deleteOne(true), longWait);
+    longWait *= 1.5; 
+  }
+}
+
+
+setTimeout(() => {
+  log("Iniciando...");
+  deleteOne();
+  setInterval(() => {
+    alreadyRemoved = alreadyRemoved.slice(-45);
+  }, 75000);
+}, 2000);
+
