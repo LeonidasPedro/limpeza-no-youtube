@@ -1,171 +1,133 @@
-const ENABLED = true;
-const MIN_DURATION_MS = 1000 * 60 * 1.5; 
-const CHECK_FOR_CONFIRM_INTERVAL = 2800;
-let CYCLE_INTERVAL = 3200;
-const LONG_WAIT_CYCLE_ORIGINAL_INTERVAL = 15000;
-let veryLongDuration = MIN_DURATION_MS * 10;
-let wantCycling = true;
-let longWait = LONG_WAIT_CYCLE_ORIGINAL_INTERVAL;
-let alreadyRemoved = [];
+(async function cleanYouTubeHistory() {
+    const CONFIG = {
+        MAX_DURATION_SECONDS: 150, // 2 minutos e 30 segundos
+        SCROLL_DELAY: 2500,        // Tempo para carregar novos itens
+        CLICK_DELAY: 800,          // Tempo entre deleções
+        MAX_SCROLL_ATTEMPTS: 15    // Quantas vezes tentar scrollar se não achar nada
+    };
 
-const disallowedChannels = [
-  "Flow Podcast",
-  "Cortes do Flow",
-  "Flow Fora de Contexto",
-  "Podpah",
-  "Cortes do Podpah",
-  "Inteligência Ltda.",
-  "Cortes Inteligentes",
-  "Inteligência Ltda",
-  "Cortes do Inteligência [OFICIAL]",
-  "Canal Caixa Preta",
-  "Mário Garcês",
-  "Duda Garbi",
-  "Cortes do Inteligência [OFICIAL]",
-  "Bento Ribeiro | Chapado Crítico",
-  "Cortes do Caixa Preta [OFICIAL]",
-  "Canal do Barreto!",
-  "O Melhor do Pretinho",
-  "Bastidores do Pretinho",
-  "Alcemar da Mascada",
-  "CalangoLive",
-  "Venus Podcast",
-  "Cortes do Venus",
-  "Ticaracaticast",
-  // kkkkkkkkkkkkkkkkkkkkk que nome é esse 
-  "Cortes do Ticaracaticast",
-  "Planeta Podcast",
-  "Cortes do Planeta Podcast",
-  "Léo Lins Podcast",
-  "Cortes do Léo Lins",
-  "Groselha Talk",
-  "Cortes do Groselha Talk",
-  "Primocast",
-  "Cortes do Primocast",
-  "Podcast do Rafinha Bastos",
-  "Rafi Bastos",
-  "Cortes - Mais que 8 Minutos [OFICIAL]",
-  "Talk Flow",
-  "Podcast Três Irmãos",
-  "Cortes dos Três Irmãos",
-  "Não Ouvo",
-  "Cortes do Não Ouvo",
-  "Cortes do Empreendacast",
-  "Nerdcast",
-  "Cortes do Nerdcast",
-  "Prosa Guiada",
-  "Cortes da Prosa Guiada",
-  "PodDelas",
-  "Cortes do PodDelas",
-  "Galãs Feios Podcast",
-  "Cortes dos Galãs Feios"
-];
+    const disallowedChannels = [
+        "Flow Podcast", "Cortes do Flow", "Flow Fora de Contexto",
+        "Podpah", "Cortes do Podpah",
+        "Inteligência Ltda.", "Cortes Inteligentes", "Inteligência Ltda", "Cortes do Inteligência [OFICIAL]",
+        "Canal Caixa Preta", "Mário Garcês", "Duda Garbi", "Cortes do Caixa Preta [OFICIAL]",
+        "Bento Ribeiro | Chapado Crítico", "Canal do Barreto!",
+        "O Melhor do Pretinho", "Bastidores do Pretinho", "Alcemar da Mascada",
+        "CalangoLive", "Venus Podcast", "Cortes do Venus",
+        "Ticaracaticast", "Cortes do Ticaracaticast",
+        "Planeta Podcast", "Cortes do Planeta Podcast",
+        "Léo Lins Podcast", "Cortes do Léo Lins",
+        "Groselha Talk", "Cortes do Groselha Talk",
+        "Primocast", "Cortes do Primocast",
+        "Podcast do Rafinha Bastos", "Rafi Bastos", "Cortes - Mais que 8 Minutos [OFICIAL]",
+        "Talk Flow", "Podcast Três Irmãos", "Cortes dos Três Irmãos",
+        "Não Ouvo", "Cortes do Não Ouvo", "Cortes do Empreendacast",
+        "Nerdcast", "Cortes do Nerdcast",
+        "Prosa Guiada", "Cortes da Prosa Guiada",
+        "PodDelas", "Cortes do PodDelas",
+        "Galãs Feios Podcast", "Cortes dos Galãs Feios",
+        "Maicon Kuster", "Maicon Küster", "Cortes do Maicon Küster",
+        "Davi", "Viniccius13", "Orochinho", "orochidois", "Near", 
+        "Cortes", "Clipes", "Games"
+    ];
 
-const log = (...args) => {
-  args[0] = `[auto-delete] ${args[0]}`;
-  console.log(...args);
-};
+    const log = (msg) => console.log(`%c[Cleaner] %c${msg}`, "color: #ff5555; font-weight: bold;", "color: white;");
+    const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-const durationString = (vidElement) => {
-  const elt = vidElement.querySelector('[aria-label="Video duration"]');
-  return elt ? elt.textContent.trim() : null;
-};
+    function parseDurationInSeconds(text) {
+        if (!text) return null;
+        const match = text.match(/(\d+):(\d+)(?::(\d+))?/);
+        if (!match) return null;
 
-const duration = (vidElement) => {
-  const dString = durationString(vidElement);
-  if (!dString) return veryLongDuration;
-  if (dString.split(':').length > 2) return veryLongDuration;
-  const [mins, secs] = dString.split(':').map(str => parseInt(str, 10));
-  return mins * 60 * 1000 + secs * 1000;
-};
-
-const getIdentifiers = (videoElement) =>
-  [...videoElement.getElementsByTagName('a')].map(anchor => anchor.textContent.trim());
-
-const vidUniquifier = (videoName, channelName) => `${videoName}|${channelName}`;
-
-const isPreviouslyRemoved = (videoElement) => {
-  const [videoName, channelName] = getIdentifiers(videoElement);
-  return alreadyRemoved.includes(vidUniquifier(videoName, channelName));
-};
-
-const isShort = (videoElement) => {
-  try {
-    return duration(videoElement) < MIN_DURATION_MS;
-  } catch (e) {
-    log(`Algum erro aqui:  ${e}`);
-    return false;
-  }
-};
-
-const isFromDisallowedChannel = (videoElement) => {
-  const [videoName, channelName] = getIdentifiers(videoElement);
-  // log(`🤔: ${channelName} - ${videoName}`);
-  return disallowedChannels.includes(channelName);
-};
-
-class ItemGetter {
-  previousCount = 0;
-  
-  next(ignorePrevious) {
-    const items = [...document.querySelectorAll('div[role="listitem"]')];
-    if (!ignorePrevious && items.length === this.previousCount) {
-      log(`SE MEXE YOUTUBE.`);
-      return null;
-    }
-    this.previousCount = items.length;
-    return items.find(v => 
-      (isShort(v) || isFromDisallowedChannel(v)) && !isPreviouslyRemoved(v)
-    );
-  }
-}
-
-const itemGetter = new ItemGetter();
-
-function deleteOne(ignorePrevious) {
-  const nextItem = itemGetter.next(ignorePrevious);
-  if (nextItem) {
-    try {
-      const [videoName, channelName] = getIdentifiers(nextItem);
-      const dString = durationString(nextItem) || "-no duration-";
-      log(`Apagando-> ${videoName} : ${channelName} (${dString})...`);
-      if (ENABLED) {
-        const deleteButton = nextItem.getElementsByTagName('button')[0];
-        deleteButton.click();
-        alreadyRemoved.push(vidUniquifier(videoName, channelName));
-      } else {
-        log(`Delete action skipped. ENABLED is false.`);
-      }
-    } catch (e) {
-      log(`Algum erro aqui: ${e}`);
-    }
-    
-    if (wantCycling) {
-      setTimeout(() => {
-        const confirmationMenu = nextItem.querySelector('[aria-label="Activity options menu"]');
-        if (confirmationMenu) {
-          const confirmDeleteButton = confirmationMenu.querySelector('[aria-label="Delete activity item"]');
-          if (confirmDeleteButton) confirmDeleteButton.click();
-          setTimeout(deleteOne, CYCLE_INTERVAL);
-        } else {
-          setTimeout(deleteOne, CYCLE_INTERVAL - CHECK_FOR_CONFIRM_INTERVAL);
+        let h = 0, m = 0, s = 0;
+        if (match[3]) {
+            h = parseInt(match[1], 10);
+            m = parseInt(match[2], 10);
+            s = parseInt(match[3], 10);
+        } else { 
+            m = parseInt(match[1], 10);
+            s = parseInt(match[2], 10);
         }
-      }, CHECK_FOR_CONFIRM_INTERVAL);
+        return (h * 3600) + (m * 60) + s;
     }
-    longWait = LONG_WAIT_CYCLE_ORIGINAL_INTERVAL;
-  } else {
-    log(`Ainda tá funcionando!! Está em um intervalo pra não bugar tudo.`);
-    setTimeout(() => deleteOne(true), longWait);
-    longWait *= 1.5; 
-  }
-}
 
+    log(`Iniciando varredura. Critérios: < 2m30s OU Lista de Canais (${disallowedChannels.length} itens)...`);
 
-setTimeout(() => {
-  log("Iniciando...");
-  deleteOne();
-  setInterval(() => {
-    alreadyRemoved = alreadyRemoved.slice(-45);
-  }, 75000);
-}, 2000);
+    async function processVisibleItems() {
+        const deleteButtons = Array.from(document.querySelectorAll('button[aria-label*="Delete"]'));
+        
+        if (deleteButtons.length === 0) {
+            log("⚠️ Nenhum botão 'Delete' encontrado. O Google pode ter mudado o layout ou a página não carregou.");
+            return 0;
+        }
 
+        let deletedCount = 0;
+
+        for (const btn of deleteButtons) {
+            const container = btn.closest('div[role="listitem"]') || btn.closest('li') || btn.parentElement.parentElement.parentElement;
+            
+            if (!container) continue;
+
+            const textContent = container.innerText;
+            
+            const hasDisallowedChannel = disallowedChannels.some(channel => 
+                textContent.includes(channel)
+            );
+
+            let isShortDuration = false;
+            let durationSecs = null;
+
+            const durationElement = Array.from(container.querySelectorAll('*')).find(el => 
+                el.innerText && /\b\d+:\d+\b/.test(el.innerText) && el.innerText.length < 10
+            ) || container.querySelector('[aria-label*="duration"]');
+
+            if (durationElement) {
+                const durationText = durationElement.getAttribute('aria-label') || durationElement.innerText;
+                durationSecs = parseDurationInSeconds(durationText);
+                
+                if (durationSecs !== null && durationSecs < CONFIG.MAX_DURATION_SECONDS) {
+                    isShortDuration = true;
+                }
+            }
+
+            if (hasDisallowedChannel || isShortDuration) {
+                let reason = "";
+                if (hasDisallowedChannel) reason = `🚫 Canal que não quero mais`;
+                else if (isShortDuration) reason = `⏱️ Curto (${durationSecs}s)`;
+
+                const videoTitle = textContent.split('\n').find(l => l.length > 3) || "Vídeo sem título";
+                
+                log(`[DEL] ${reason} -> ${videoTitle.substring(0, 40)}...`);
+                
+                btn.click();
+                deletedCount++;
+                
+                await wait(CONFIG.CLICK_DELAY);
+            }
+        }
+        return deletedCount;
+    }
+
+    let emptyScrolls = 0;
+
+    while (true) {
+        const removed = await processVisibleItems();
+        
+        if (removed > 0) {
+            log(`✅ ${removed} itens removidos neste lote. Processando...`);
+            emptyScrolls = 0;
+        } else {
+            emptyScrolls++;
+            log(`Nenhum alvo visível. Scrollando... (${emptyScrolls}/${CONFIG.MAX_SCROLL_ATTEMPTS})`);
+        }
+
+        const prevHeight = document.documentElement.scrollHeight;
+        window.scrollTo(0, document.documentElement.scrollHeight);
+        await wait(CONFIG.SCROLL_DELAY);
+
+        if (document.documentElement.scrollHeight === prevHeight && emptyScrolls >= CONFIG.MAX_SCROLL_ATTEMPTS) {
+            log("🏁 Fim do histórico alcançado ou timeout de carregamento.");
+            break;
+        }
+    }
+})();
